@@ -1,0 +1,5 @@
+Pillow
+PyMuPDF
+PySide6
+nuitka
+ordered-set
