@@ -112,17 +112,27 @@ MergePDF/
 
 ## 📦 打包為執行檔
 
-使用 PyInstaller 將專案打包為獨立執行檔：
+本專案使用 Nuitka 進行編譯，以獲得更好的效能和更小的檔案體積。
+
+### 使用編譯腳本（推薦）
+
+專案內建了 PowerShell 編譯腳本，可自動處理參數設定：
+
+```powershell
+# 執行編譯腳本
+.\build.ps1
+```
+
+### 手動編譯
+
+若您希望手動執行命令：
 
 ```bash
-# 安裝 PyInstaller
-pip install pyinstaller
+# 安裝 Nuitka
+pip install nuitka
 
-# 打包（單一執行檔）
-pyinstaller --onefile --windowed --name MergePDF main.py
-
-# 打包（資料夾模式，啟動較快）
-pyinstaller --onedir --windowed --name MergePDF main.py
+# 執行編譯
+python -m nuitka --standalone --onefile --enable-plugin=pyside6 --windows-console-mode=disable --output-filename=MergePDF.exe main.py
 ```
 
 執行檔將位於 `dist` 資料夾中。
