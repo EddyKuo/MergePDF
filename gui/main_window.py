@@ -9,12 +9,46 @@ from PySide6.QtWidgets import (
     QMessageBox, QLabel, QLineEdit, QProgressDialog, QHeaderView,
     QMenu, QComboBox, QSpinBox
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QThread, Signal
 from PySide6.QtGui import QIcon, QAction
 import os
 from typing import List, Optional
 from core.file_handler import FileHandler
 from utils.validators import validate_files, get_file_type
+
+
+class MergeWorker(QThread):
+    """背景合併執行緒"""
+    progress = Signal(int, int, str)
+    finished = Signal()
+    error = Signal(str)
+
+    def __init__(self, file_list, output_path, layout_options):
+        super().__init__()
+        self.file_list = file_list
+        self.output_path = output_path
+        self.layout_options = layout_options
+        self.is_cancelled = False
+
+    def run(self):
+        try:
+            def callback(current, total, message):
+                if self.is_cancelled:
+                    raise Exception("使用者取消操作")
+                self.progress.emit(current, total, message)
+
+            FileHandler.merge_files(
+                self.file_list,
+                self.output_path,
+                callback,
+                self.layout_options
+            )
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def cancel(self):
+        self.is_cancelled = True
 
 
 class MainWindow(QMainWindow):
@@ -844,48 +878,52 @@ class MainWindow(QMainWindow):
                 return
         
         # 建立進度對話框
-        progress = QProgressDialog("正在合併檔案，請稍候...", "取消", 0, len(self.file_list), self)
-        progress.setWindowTitle("合併中")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
+        self.progress_dialog = QProgressDialog("正在合併檔案，請稍候...", "取消", 0, len(self.file_list), self)
+        self.progress_dialog.setWindowTitle("合併中")
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
         
-        def progress_callback(current, total, message):
-            """進度回呼函數"""
-            progress.setValue(current)
-            progress.setLabelText(f"進度: {current}/{total}\n{message}")
-            if progress.wasCanceled():
-                raise Exception("使用者取消操作")
+        # 啟動 worker thread
+        layout_options = self._get_layout_options()
+        self.worker = MergeWorker(list(self.file_list), output_path, layout_options)
         
-        # 執行合併
-        try:
-            # 取得圖片版面設定
-            layout_options = self._get_layout_options()
-            
-            FileHandler.merge_files(
-                self.file_list, 
-                output_path, 
-                progress_callback,
-                layout_options=layout_options
-            )
-            progress.close()
-            
-            # 成功提示
-            reply = QMessageBox.question(
-                self,
-                "合併完成",
-                f"檔案已成功合併！\n\n輸出位置：\n{output_path}\n\n是否要開啟檔案所在資料夾？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                os.startfile(output_dir)
-            
-            self.statusBar().showMessage("合併完成！")
-            
-        except Exception as e:
-            progress.close()
-            QMessageBox.critical(self, "合併失敗", f"合併過程發生錯誤：\n\n{str(e)}")
-            self.statusBar().showMessage("合併失敗")
+        # 連接信號
+        self.worker.progress.connect(self.update_progress)
+        self.worker.finished.connect(lambda: self.merge_finished(output_path, output_dir))
+        self.worker.error.connect(self.merge_failed)
+        self.progress_dialog.canceled.connect(self.worker.cancel)
+
+        self.worker.start()
+
+    def update_progress(self, current, total, message):
+        """更新進度"""
+        self.progress_dialog.setValue(current)
+        self.progress_dialog.setLabelText(f"進度: {current}/{total}\n{message}")
+
+    def merge_finished(self, output_path, output_dir):
+        """合併完成處理"""
+        self.progress_dialog.close()
+
+        # 成功提示
+        reply = QMessageBox.question(
+            self,
+            "合併完成",
+            f"檔案已成功合併！\n\n輸出位置：\n{output_path}\n\n是否要開啟檔案所在資料夾？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            os.startfile(output_dir)
+
+        self.statusBar().showMessage("合併完成！")
+        self.worker = None
+
+    def merge_failed(self, error_msg):
+        """合併失敗處理"""
+        self.progress_dialog.close()
+        QMessageBox.critical(self, "合併失敗", f"合併過程發生錯誤：\n\n{error_msg}")
+        self.statusBar().showMessage("合併失敗")
+        self.worker = None
     
     def _get_layout_options(self) -> dict:
         """取得圖片版面設定選項"""
