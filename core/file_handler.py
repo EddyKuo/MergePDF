@@ -4,7 +4,7 @@
 """
 
 import os
-from typing import List
+from typing import List, Tuple
 from core.image_converter import ImageConverter
 from core.pdf_merger import PDFMerger
 from utils.validators import is_image_file, is_pdf_file
@@ -49,45 +49,70 @@ class FileHandler:
         merger = PDFMerger()
         
         try:
-            # 分離圖片和 PDF
-            image_files = []
-            pdf_files_positions = []
+            # 1. 將檔案分組（連續的圖片為一組，PDF 單獨處理）
+            # 這樣可以保持使用者定義的順序，同時允許圖片批次處理（排版）
+            groups = []
+            current_image_group = []
             
-            for index, file_path in enumerate(file_paths):
+            for file_path in file_paths:
                 if is_image_file(file_path):
-                    image_files.append((index, file_path))
-                elif is_pdf_file(file_path):
-                    pdf_files_positions.append((index, file_path))
+                    current_image_group.append(file_path)
                 else:
-                    raise ValueError(f"不supported的檔案格式: {file_path}")
+                    # 遇到非圖片（PDF），先結算之前的圖片組
+                    if current_image_group:
+                        groups.append(('images', current_image_group))
+                        current_image_group = []
+
+                    if is_pdf_file(file_path):
+                        groups.append(('pdf', file_path))
+                    else:
+                        raise ValueError(f"不支援的檔案格式: {file_path}")
             
-            # 處理圖片檔案（批次轉換）
-            if image_files:
-                # 取得圖片路徑列表
-                img_paths = [path for _, path in image_files]
-                
-                # 使用版面選項轉換圖片
-                pdf_bytes = ImageConverter.images_to_pdf_bytes(
-                    img_paths,
-                    page_size=layout_options['page_size'],
-                    images_per_page=layout_options['images_per_page'],
-                    margin_mm=layout_options['margin_mm'],
-                    spacing_mm=layout_options['spacing_mm']
-                )
-                merger.add_pdf_bytes(pdf_bytes)
-                
-                if progress_callback:
-                    progress_callback(len(image_files), total_files, f"已轉換 {len(image_files)} 張圖片")
+            # 處理最後的圖片組
+            if current_image_group:
+                groups.append(('images', current_image_group))
             
-            # 處理 PDF 檔案
-            for index, pdf_path in pdf_files_positions:
-                file_name = os.path.basename(pdf_path)
-                merger.add_pdf(pdf_path)
-                
-                if progress_callback:
-                    progress_callback(index + 1, total_files, f"處理中: {file_name}")
+            # 2. 依序處理各組
+            processed_count = 0
             
-            # 儲存合併結果
+            for type, data in groups:
+                if type == 'images':
+                    # data 是圖片路徑列表
+                    image_paths = data
+                    count = len(image_paths)
+
+                    if progress_callback:
+                        progress_callback(processed_count, total_files, f"正在轉換 {count} 張圖片...")
+
+                    # 使用版面選項轉換圖片
+                    pdf_bytes = ImageConverter.images_to_pdf_bytes(
+                        image_paths,
+                        page_size=layout_options['page_size'],
+                        images_per_page=layout_options['images_per_page'],
+                        margin_mm=layout_options['margin_mm'],
+                        spacing_mm=layout_options['spacing_mm']
+                    )
+                    merger.add_pdf_bytes(pdf_bytes)
+
+                    processed_count += count
+                    if progress_callback:
+                        progress_callback(processed_count, total_files, f"已轉換 {count} 張圖片")
+
+                elif type == 'pdf':
+                    # data 是 PDF 檔案路徑
+                    pdf_path = data
+                    file_name = os.path.basename(pdf_path)
+
+                    if progress_callback:
+                        progress_callback(processed_count, total_files, f"正在合併: {file_name}")
+
+                    merger.add_pdf(pdf_path)
+
+                    processed_count += 1
+                    if progress_callback:
+                        progress_callback(processed_count, total_files, f"已合併: {file_name}")
+
+            # 3. 儲存合併結果
             if progress_callback:
                 progress_callback(total_files, total_files, "正在儲存...")
             
